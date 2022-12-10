@@ -2,6 +2,9 @@ const express = require('express');
 const { auth } = require('../');
 const session = require('express-session');
 
+// Match express-session default store
+const MemoryStore = require('memorystore')(auth);
+
 const app = express();
 
 // Call first, so afterCallback can set session
@@ -24,6 +27,11 @@ app.use(
         req.session.loginCount = 1;
       }
       return session;
+    },
+    session: {
+      store: new MemoryStore({
+        checkPeriod: 24 * 60 * 1000,
+      }),
     },
   })
 );
