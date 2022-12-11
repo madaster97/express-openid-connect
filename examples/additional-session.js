@@ -6,6 +6,79 @@ const session = require('express-session');
 // Match express-session default store
 const MemoryStore = require('memorystore')(auth);
 
+/** Assumed workflow, the user will not be given a session ID until one of the following occurs:
+ * 1. They do a pre-login action like a shopping cart choice
+ * 2. They complete a login flow
+ *
+ * In addition, logging out will:
+ * 1. Delete the current session, including the shopping cart, from the store
+ * 2. Leave the user without a session ID
+ */
+
+/**
+ * Same user logs in again
+ * 1. Update the existing session (keep the old ID)
+ * 2. Save the update so subsequent requests get the new data
+ */
+async function reLogin(req) {
+  req.session.loginCount++;
+  return new Promise((resolve, reject) => {
+    req.session.save((err) => {
+      if (err) {
+        reject(err);
+      } else {
+        resolve();
+      }
+    });
+  });
+}
+/**
+ * New user logs into blank session
+ * 1. Check for pre-login session, save off for later
+ * 2. Always regenerate for new login
+ * 3. Always save after handling login
+ *
+ * We'll always regenerate
+ */
+async function newLogin(req, cart) {
+  return new Promise((resolve, reject) => {
+    req.session.regenerate((err) => {
+      if (err) {
+        reject(err);
+      } else {
+        req.session.loginCount = 1;
+        if (cart) {
+          req.session.cart = cart;
+        }
+        req.session.save((err) => {
+          if (err) {
+            reject(err);
+          } else {
+            resolve();
+          }
+        });
+      }
+    });
+  });
+}
+// // New user logs in over old user
+async function replaceLogin(req) {
+  // Can treat it as new login with no cart
+  return newLogin(req);
+}
+// Logout user
+async function logout(req) {
+  return new Promise((resolve, reject) => {
+    req.destroy((err) => {
+      if (err) {
+        reject(err);
+      } else {
+        resolve();
+      }
+    });
+  });
+}
+
 const app = express();
 
 // Call first, so afterCallback can set session
@@ -13,7 +86,7 @@ app.use(
   session({
     secret: 'keyboard cat',
     resave: false,
-    saveUninitialized: true,
+    saveUninitialized: false,
   })
 );
 app.use(
@@ -27,56 +100,24 @@ app.use(
       prompt: 'login',
     },
     authRequired: false,
-    afterCallback: (req, res, session) => {
+    afterCallback: async (req, res, session) => {
       const { sub: newSub } = jose.JWT.decode(session.id_token);
-      return new Promise((resolve, reject) => {
-        if (req.oidc.isAuthenticated()) {
-          if (req.oidc.user.sub === newSub) {
-            // The same user logged in again, just update existing session
-            req.session.loginCount++;
-            resolve(session);
-          } else {
-            // A different user logged in, logout old user, regenerate ID and assign new session
-            req.session.loginCount = null;
-            req.session.save(function (err) {
-              if (err) {
-                reject(err);
-              } else {
-                // regenerate the session, which is good practice to help
-                // guard against forms of session fixation
-                req.session.regenerate(function (err) {
-                  if (err) {
-                    reject(err);
-                  } else {
-                    req.session.loginCount = 1;
-                    resolve(session);
-                  }
-                });
-              }
-            });
-          }
+      if (req.oidc.isAuthenticated()) {
+        if (req.oidc.user.sub === newSub) {
+          // The same user logged in again, just update existing session
+          await reLogin(req);
         } else {
-          // A new user is replacing an anonymous session
-          // regenerate the session, which is good practice to help
-          // guard against forms of session fixation
-          req.session.regenerate(function (err) {
-            if (err) {
-              reject(err);
-            } else {
-              req.session.loginCount = 1;
-              // save the session before redirection to ensure page
-              // load does not happen before session is saved
-              req.session.save(function (err) {
-                if (err) {
-                  reject(err);
-                } else {
-                  resolve(session);
-                }
-              });
-            }
-          });
+          // A different user logged in, logout old user, regenerate ID and assign new session
+          await replaceLogin(req);
         }
-      });
+      } else {
+        // A new user is replacing an anonymous session
+        // regenerate the session, which is good practice to help
+        // guard against forms of session fixation
+        const { cart } = req.session; // Destructure to make a copy
+        await newLogin(req, cart);
+      }
+      return session;
     },
     session: {
       store: new MemoryStore({
@@ -86,29 +127,20 @@ app.use(
   })
 );
 
-app.get('/app-logout', (req, res, next) => {
-  req.session.loginCount = null;
-  req.session.save(function (err) {
-    if (err) next(err);
-
-    // regenerate the session, which is good practice to help
-    // guard against forms of session fixation
-    req.session.regenerate(function (err) {
-      if (err) next(err);
-      res.redirect('/');
-    });
-  });
+app.get('/app-logout', async (req, res) => {
+  await logout(req);
+  res.redirect('/');
 });
 
 app.get('/', (req, res) => {
   if (req.oidc.isAuthenticated()) {
     res.send(
       `You are logged in as ${req.oidc.user.sub},
-            and have logged in ${req.session.loginCount} times.
-            <br/>
-            You can <a href="login">login</a> again or <a href="logout">logout</a>.
-            <br/>
-            Your session ID is ${req.session.id}`
+      and have logged in ${req.session.loginCount} times.
+      <br/>
+      You can <a href="login">login</a> again or <a href="logout">logout</a>.
+      <br/>
+      Your session ID is ${req.session.id}`
     );
   } else {
     res.send(
@@ -116,7 +148,7 @@ app.get('/', (req, res) => {
         req.session
       )}. Please <a href="login">login</a> to continue
       <br/>
-            Your session ID is ${req.session.id}`
+      Your session ID is ${req.session.id}`
     );
   }
 });
