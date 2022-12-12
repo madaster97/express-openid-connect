@@ -134,7 +134,19 @@ app.get('/app-logout', async (req, res) => {
   res.redirect('/');
 });
 
+app.get('/populate-cart', (req, res, next) => {
+  req.session.cart = ['apples', 'bananas'];
+  req.session.save((err) => {
+    if (err) next(err);
+    else res.redirect('/');
+  });
+});
+
 app.get('/', (req, res) => {
+  const cartFooter = req.session.cart
+    ? `Your cart is ${JSON.stringify(req.session.cart)}`
+    : `Populate your cart <a href="populate-cart">here</a>`;
+
   if (req.oidc.isAuthenticated()) {
     res.send(
       `You are logged in as ${req.oidc.user.sub},
@@ -142,15 +154,19 @@ app.get('/', (req, res) => {
       <br/>
       You can <a href="login">login</a> again or <a href="logout">logout</a>.
       <br/>
-      Your session ID is ${req.session.id}`
+      Your session ID is ${req.session.id}
+      <br/>
+      ` + cartFooter
     );
   } else {
     res.send(
-      `You are not logged in, and have session ${JSON.stringify(
-        req.session
-      )}. Please <a href="login">login</a> to continue
+      `You are not logged in, and have session ${JSON.stringify(req.session)}.
       <br/>
-      Your session ID is ${req.session.id}`
+      Please <a href="login">login</a> to continue
+      <br/>
+      Your session ID is ${req.session.id}
+      <br/>
+      ` + cartFooter
     );
   }
 });
