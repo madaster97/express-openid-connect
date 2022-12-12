@@ -6,13 +6,15 @@ const session = require('express-session');
 // Match express-session default store
 const MemoryStore = require('memorystore')(auth);
 
-/** Assumed workflow, the user will not be given a session ID until one of the following occurs:
+/** Assumed workflow, the user's session will not be persisted until one of the following occurs:
  * 1. They do a pre-login action like a shopping cart choice
  * 2. They complete a login flow
  *
  * In addition, logging out will:
  * 1. Delete the current session, including the shopping cart, from the store
- * 2. Leave the user without a session ID
+ * 2. Leave the user with a non-persistent session ID
+ *
+ * When the user's ID hasn't been persisted, refreshing will assign a new ID
  */
 
 /**
@@ -69,7 +71,7 @@ async function replaceLogin(req) {
 // Logout user
 async function logout(req) {
   return new Promise((resolve, reject) => {
-    req.destroy((err) => {
+    req.session.destroy((err) => {
       if (err) {
         reject(err);
       } else {
